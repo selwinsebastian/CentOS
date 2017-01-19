@@ -1472,6 +1472,8 @@ int __pm_genpd_add_device(struct generic_pm_domain *genpd, struct device *dev,
 	return ret;
 }
 
+EXPORT_SYMBOL_GPL(__pm_genpd_add_device);
+
 /**
  * __pm_genpd_of_add_device - Add a device to an I/O PM domain.
  * @genpd_node: Device tree node pointer representing a PM domain to which the
@@ -1578,6 +1580,8 @@ int pm_genpd_remove_device(struct generic_pm_domain *genpd,
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(pm_genpd_remove_device);
+
 
 /**
  * pm_genpd_dev_need_restore - Set/unset the device's "need restore" flag.
@@ -2179,3 +2183,5 @@ void pm_genpd_init(struct generic_pm_domain *genpd,
 	list_add(&genpd->gpd_list_node, &gpd_list);
 	mutex_unlock(&gpd_list_lock);
 }
+EXPORT_SYMBOL_GPL(pm_genpd_init);
+
