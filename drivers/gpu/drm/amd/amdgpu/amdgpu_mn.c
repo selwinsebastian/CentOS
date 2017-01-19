@@ -232,10 +232,7 @@ static struct amdgpu_mn *amdgpu_mn_get(struct amdgpu_device *adev)
 	int r;
 
 	mutex_lock(&adev->mn_lock);
-	if (down_write(&mm->mmap_sem)) {
-		mutex_unlock(&adev->mn_lock);
-		return ERR_PTR(-EINTR);
-	}
+	down_write(&mm->mmap_sem);
 
 	hash_for_each_possible(adev->mn_hash, rmn, node, (unsigned long)mm)
 		if (rmn->mm == mm)
