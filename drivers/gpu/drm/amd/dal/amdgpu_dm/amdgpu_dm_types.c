@@ -1818,7 +1818,7 @@ int amdgpu_dm_crtc_init(struct amdgpu_display_manager *dm,
 		&dm_plane_funcs,
 		rgb_formats,
 		ARRAY_SIZE(rgb_formats),
-		DRM_PLANE_TYPE_PRIMARY);
+		DRM_PLANE_TYPE_PRIMARY, NULL);
 
 	primary_plane->crtc = &acrtc->base;
 
@@ -1829,7 +1829,7 @@ int amdgpu_dm_crtc_init(struct amdgpu_display_manager *dm,
 			&acrtc->base,
 			primary_plane,
 			NULL,
-			&amdgpu_dm_crtc_funcs);
+			&amdgpu_dm_crtc_funcs, NULL);
 
 	if (res)
 		goto fail;
@@ -2256,7 +2256,7 @@ int amdgpu_dm_encoder_init(
 	int res = drm_encoder_init(dev,
 				   &aencoder->base,
 				   &amdgpu_dm_encoder_funcs,
-				   DRM_MODE_ENCODER_TMDS);
+				   DRM_MODE_ENCODER_TMDS, NULL);
 
 	aencoder->base.possible_crtcs = amdgpu_dm_get_encoder_crtc_mask(adev);
 
