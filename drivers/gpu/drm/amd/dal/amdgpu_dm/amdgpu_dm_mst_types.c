@@ -211,7 +211,7 @@ dm_dp_create_fake_mst_encoder(struct amdgpu_connector *connector)
 		dev,
 		&amdgpu_encoder->base,
 		NULL,
-		DRM_MODE_ENCODER_DPMST);
+		DRM_MODE_ENCODER_DPMST, NULL);
 
 	drm_encoder_helper_add(encoder, &amdgpu_dm_encoder_helper_funcs);
 
