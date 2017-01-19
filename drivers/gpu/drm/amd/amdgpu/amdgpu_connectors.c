@@ -439,7 +439,7 @@ static void amdgpu_connector_add_common_modes(struct drm_encoder *encoder,
 	struct drm_display_mode *mode = NULL;
 	struct drm_display_mode *native_mode = &amdgpu_encoder->native_mode;
 	int i;
-	struct mode_size {
+	static const struct mode_size {
 		int w;
 		int h;
 	} common_modes[17] = {
@@ -769,8 +769,10 @@ static void amdgpu_connector_destroy(struct drm_connector *connector)
 {
 	struct amdgpu_connector *amdgpu_connector = to_amdgpu_connector(connector);
 
-	if (amdgpu_connector->ddc_bus->has_aux)
+	if (amdgpu_connector->ddc_bus->has_aux) {
 		drm_dp_aux_unregister(&amdgpu_connector->ddc_bus->aux);
+		amdgpu_connector->ddc_bus->has_aux = false;
+	}
 	amdgpu_connector_free_edid(connector);
 	kfree(amdgpu_connector->con_priv);
 	drm_connector_unregister(connector);
@@ -1690,7 +1692,6 @@ amdgpu_connector_add(struct amdgpu_device *adev,
 						   DRM_MODE_SCALE_NONE);
 			/* no HPD on analog connectors */
 			amdgpu_connector->hpd.hpd = AMDGPU_HPD_NONE;
-			connector->polled = DRM_CONNECTOR_POLL_CONNECT;
 			connector->interlace_allowed = true;
 			connector->doublescan_allowed = true;
 			break;
@@ -1893,8 +1894,10 @@ amdgpu_connector_add(struct amdgpu_device *adev,
 	}
 
 	if (amdgpu_connector->hpd.hpd == AMDGPU_HPD_NONE) {
-		if (i2c_bus->valid)
-			connector->polled = DRM_CONNECTOR_POLL_CONNECT;
+		if (i2c_bus->valid) {
+			connector->polled = DRM_CONNECTOR_POLL_CONNECT |
+			                    DRM_CONNECTOR_POLL_DISCONNECT;
+		}
 	} else
 		connector->polled = DRM_CONNECTOR_POLL_HPD;
 

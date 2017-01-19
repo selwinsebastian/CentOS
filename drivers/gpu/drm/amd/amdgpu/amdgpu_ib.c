@@ -22,9 +22,9 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors: Dave Airlie
- *          Alex Deucher
- *          Jerome Glisse
- *          Christian König
+ *	    Alex Deucher
+ *	    Jerome Glisse
+ *	    Christian König
  */
 #include <linux/seq_file.h>
 #include <linux/slab.h>
@@ -32,6 +32,8 @@
 #include <drm/amdgpu_drm.h>
 #include "amdgpu.h"
 #include "atom.h"
+
+#define AMDGPU_IB_TEST_TIMEOUT	msecs_to_jiffies(1000)
 
 /*
  * IB
@@ -74,9 +76,6 @@ int amdgpu_ib_get(struct amdgpu_device *adev, struct amdgpu_vm *vm,
 			ib->gpu_addr = amdgpu_sa_bo_gpu_addr(ib->sa_bo);
 	}
 
-	ib->vm = vm;
-	ib->vm_id = 0;
-
 	return 0;
 }
 
@@ -89,7 +88,8 @@ int amdgpu_ib_get(struct amdgpu_device *adev, struct amdgpu_vm *vm,
  *
  * Free an IB (all asics).
  */
-void amdgpu_ib_free(struct amdgpu_device *adev, struct amdgpu_ib *ib, struct fence *f)
+void amdgpu_ib_free(struct amdgpu_device *adev, struct amdgpu_ib *ib,
+		    struct fence *f)
 {
 	amdgpu_sa_bo_free(adev, &ib->sa_bo, f);
 }
@@ -100,7 +100,6 @@ void amdgpu_ib_free(struct amdgpu_device *adev, struct amdgpu_ib *ib, struct fen
  * @adev: amdgpu_device pointer
  * @num_ibs: number of IBs to schedule
  * @ibs: IB objects to schedule
- * @f: fence created during this submission
  *
  * Schedule an IB on the associated ring (all asics).
  * Returns 0 on success, error on failure.
@@ -112,95 +111,120 @@ void amdgpu_ib_free(struct amdgpu_device *adev, struct amdgpu_ib *ib, struct fen
  * the resource descriptors will be already in cache when the draw is
  * processed.  To accomplish this, the userspace driver submits two
  * IBs, one for the CE and one for the DE.  If there is a CE IB (called
- * a CONST_IB), it will be put on the ring prior to the DE IB.  Prior
+ * a CONST_IB), it will be put on the ring prior to the DE IB.	Prior
  * to SI there was just a DE IB.
  */
 int amdgpu_ib_schedule(struct amdgpu_ring *ring, unsigned num_ibs,
 		       struct amdgpu_ib *ibs, struct fence *last_vm_update,
-		       struct fence **f)
+		       struct amdgpu_job *job, struct fence **f)
 {
 	struct amdgpu_device *adev = ring->adev;
 	struct amdgpu_ib *ib = &ibs[0];
-	struct amdgpu_ctx *ctx, *old_ctx;
-	struct amdgpu_vm *vm;
-	struct fence *hwf;
-	unsigned i;
+        bool skip_preamble, need_ctx_switch;
+        unsigned patch_offset = ~0;
+        struct amdgpu_vm *vm;
+	uint64_t fence_ctx;
+        uint32_t status = 0, alloc_size;
+
+        unsigned i;
+
 	int r = 0;
 
 	if (num_ibs == 0)
 		return -EINVAL;
 
-	ctx = ibs->ctx;
-	vm = ibs->vm;
+        /* ring tests don't use a job */
+        if (job) {
+                vm = job->vm;
+                fence_ctx = job->fence_ctx;
+        } else {
+                vm = NULL;
+                fence_ctx = 0;
+        }
 
 	if (!ring->ready) {
-		dev_err(adev->dev, "couldn't schedule ib\n");
+                dev_err(adev->dev, "couldn't schedule ib on ring <%s>\n", ring->name);
 		return -EINVAL;
 	}
 
-	if (vm && !ibs->vm_id) {
+        if (vm && !job->vm_id) {
 		dev_err(adev->dev, "VM IB without ID\n");
 		return -EINVAL;
 	}
 
-	r = amdgpu_ring_alloc(ring, 256 * num_ibs);
+        alloc_size = ring->funcs->emit_frame_size + num_ibs *
+                ring->funcs->emit_ib_size; 
+        
+	r = amdgpu_ring_alloc(ring, alloc_size);
 	if (r) {
 		dev_err(adev->dev, "scheduling IB failed (%d).\n", r);
 		return r;
 	}
 
+	if (ring->funcs->init_cond_exec)
+		patch_offset = amdgpu_ring_init_cond_exec(ring);
+
 	if (vm) {
-		/* do context switch */
-		amdgpu_vm_flush(ring, ib->vm_id, ib->vm_pd_addr,
-				ib->gds_base, ib->gds_size,
-				ib->gws_base, ib->gws_size,
-				ib->oa_base, ib->oa_size);
-
-		if (ring->funcs->emit_hdp_flush)
-			amdgpu_ring_emit_hdp_flush(ring);
-	}
-
-	old_ctx = ring->current_ctx;
-	for (i = 0; i < num_ibs; ++i) {
-		ib = &ibs[i];
-
-		if (ib->ctx != ctx || ib->vm != vm) {
-			ring->current_ctx = old_ctx;
-			if (ib->vm_id)
-				amdgpu_vm_reset_id(adev, ib->vm_id);
+                r = amdgpu_vm_flush(ring, job);
+		if (r) {
 			amdgpu_ring_undo(ring);
-			return -EINVAL;
+			return r;
+		    }
 		}
-		amdgpu_ring_emit_ib(ring, ib);
-		ring->current_ctx = ctx;
+
+	if (ring->funcs->emit_hdp_flush)
+		amdgpu_ring_emit_hdp_flush(ring);
+
+	/* always set cond_exec_polling to CONTINUE */
+	*ring->cond_exe_cpu_addr = 1;
+ 
+        skip_preamble = ring->current_ctx == fence_ctx;
+        need_ctx_switch = ring->current_ctx != fence_ctx; 
+        if (job && ring->funcs->emit_cntxcntl) {
+                if (need_ctx_switch)
+                        status |= AMDGPU_HAVE_CTX_SWITCH;
+                status |= job->preamble_status;
+                amdgpu_ring_emit_cntxcntl(ring, status);
+        }
+
+	for (i = 0; i < num_ibs; ++i) {
+                ib = &ibs[i]; 
+                
+		/* drop preamble IBs if we don't have a context switch */
+                if ((ib->flags & AMDGPU_IB_FLAG_PREAMBLE) &&
+                        skip_preamble &&
+                        !(status & AMDGPU_PREAMBLE_IB_PRESENT_FIRST))
+                        continue;
+
+                amdgpu_ring_emit_ib(ring, ib, job ? job->vm_id : 0,
+                                    need_ctx_switch);
+                need_ctx_switch = false;
 	}
 
-	if (vm) {
-		if (ring->funcs->emit_hdp_invalidate)
-			amdgpu_ring_emit_hdp_invalidate(ring);
-	}
+	if (ring->funcs->emit_hdp_invalidate)
+		amdgpu_ring_emit_hdp_invalidate(ring);
 
-	r = amdgpu_fence_emit(ring, &hwf);
+        r = amdgpu_fence_emit(ring, f);
 	if (r) {
 		dev_err(adev->dev, "failed to emit fence (%d)\n", r);
-		ring->current_ctx = old_ctx;
-		if (ib->vm_id)
-			amdgpu_vm_reset_id(adev, ib->vm_id);
+                if (job && job->vm_id)
+                        amdgpu_vm_reset_id(adev, job->vm_id);
 		amdgpu_ring_undo(ring);
 		return r;
 	}
 
 	/* wrap the last IB with fence */
-	if (ib->user) {
-		uint64_t addr = amdgpu_bo_gpu_offset(ib->user->bo);
-		addr += ib->user->offset;
-		amdgpu_ring_emit_fence(ring, addr, ib->sequence,
+	if (job && job->uf_addr) {
+		amdgpu_ring_emit_fence(ring, job->uf_addr, job->uf_sequence,
 				       AMDGPU_FENCE_FLAG_64BIT);
 	}
 
-	if (f)
-		*f = fence_get(hwf);
-
+	if (patch_offset != ~0 && ring->funcs->patch_cond_exec)
+		amdgpu_ring_patch_cond_exec(ring, patch_offset);
+ 
+        ring->current_ctx = fence_ctx;
+        if (ring->funcs->emit_switch_buffer)
+                amdgpu_ring_emit_switch_buffer(ring);
 	amdgpu_ring_commit(ring);
 	return 0;
 }
@@ -279,7 +303,7 @@ int amdgpu_ib_ring_tests(struct amdgpu_device *adev)
 		if (!ring || !ring->ready)
 			continue;
 
-		r = amdgpu_ring_test_ib(ring);
+		r = amdgpu_ring_test_ib(ring, AMDGPU_IB_TEST_TIMEOUT);
 		if (r) {
 			ring->ready = false;
 
@@ -315,7 +339,7 @@ static int amdgpu_debugfs_sa_info(struct seq_file *m, void *data)
 
 }
 
-static struct drm_info_list amdgpu_debugfs_sa_list[] = {
+static const struct drm_info_list amdgpu_debugfs_sa_list[] = {
 	{"amdgpu_sa_info", &amdgpu_debugfs_sa_info, 0, NULL},
 };
 

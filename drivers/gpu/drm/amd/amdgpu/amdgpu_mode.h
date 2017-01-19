@@ -37,8 +37,13 @@
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_plane_helper.h>
+#include <drm/drm_fb_helper.h>
 #include <linux/i2c.h>
 #include <linux/i2c-algo-bit.h>
+
+#include <drm/drm_dp_mst_helper.h>
+#include <linux/hrtimer.h>
+#include "amdgpu_irq.h"
 
 struct amdgpu_bo;
 struct amdgpu_device;
@@ -283,7 +288,7 @@ struct amdgpu_display_funcs {
 	u32 (*hpd_get_gpio_reg)(struct amdgpu_device *adev);
 	/* pageflipping */
 	void (*page_flip)(struct amdgpu_device *adev,
-			 int crtc_id, u64 crtc_base);
+			  int crtc_id, u64 crtc_base, bool async);
 	int (*page_flip_get_scanoutpos)(struct amdgpu_device *adev, int crtc,
 					u32 *vbl, u32 *position);
 	/* display topology setup */
@@ -303,6 +308,27 @@ struct amdgpu_display_funcs {
 			       struct amdgpu_mode_mc_save *save);
 	void (*resume_mc_access)(struct amdgpu_device *adev,
 				 struct amdgpu_mode_mc_save *save);
+	/* it is used to enter or exit into free sync mode */
+	int (*notify_freesync)(struct drm_device *dev, void *data,
+			       struct drm_file *filp);
+	/* it is used to allow enablement of freesync mode */
+	int (*set_freesync_property)(struct drm_connector *connector,
+				     struct drm_property *property,
+				     uint64_t val);
+
+
+};
+
+struct amdgpu_framebuffer {
+	struct drm_framebuffer base;
+	struct drm_gem_object *obj;
+};
+
+struct amdgpu_fbdev {
+	struct drm_fb_helper helper;
+	struct amdgpu_framebuffer rfb;
+	struct list_head fbdev_list;
+	struct amdgpu_device *adev;
 };
 
 struct amdgpu_mode_info {
@@ -323,6 +349,10 @@ struct amdgpu_mode_info {
 	struct drm_property *audio_property;
 	/* FMT dithering */
 	struct drm_property *dither_property;
+	/* it is used to allow enablement of freesync mode */
+	struct drm_property *freesync_property;
+	/* it is used to know about display capability of freesync mode */
+	struct drm_property *freesync_capable_property;
 	/* hardcoded DFP edid from BIOS */
 	struct edid *bios_hardcoded_edid;
 	int bios_hardcoded_edid_size;
@@ -409,6 +439,14 @@ struct amdgpu_crtc {
 	u32 wm_high;
 	u32 lb_vblank_lead_lines;
 	struct drm_display_mode hw_mode;
+
+	int otg_inst;
+	uint32_t flip_flags;
+	/* After Set Mode target will be non-NULL */
+	struct dc_target *target;
+	/* for virtual dce */
+	struct hrtimer vblank_timer;
+	enum amdgpu_interrupt_state vsync_timer_enabled;
 };
 
 struct amdgpu_encoder_atom_dig {
@@ -498,6 +536,19 @@ enum amdgpu_connector_dither {
 	AMDGPU_FMT_DITHER_ENABLE = 1,
 };
 
+struct amdgpu_dm_dp_aux {
+	struct drm_dp_aux aux;
+	uint32_t link_index;
+};
+
+struct amdgpu_i2c_adapter {
+	struct i2c_adapter base;
+	struct amdgpu_display_manager *dm;
+	uint32_t link_index;
+};
+
+#define TO_DM_AUX(x) container_of((x), struct amdgpu_dm_dp_aux, aux)
+
 struct amdgpu_connector {
 	struct drm_connector base;
 	uint32_t connector_id;
@@ -509,6 +560,14 @@ struct amdgpu_connector {
 	/* we need to mind the EDID between detect
 	   and get modes due to analog/digital/tvencoder */
 	struct edid *edid;
+	/* number of modes generated from EDID at 'dc_sink' */
+	int num_modes;
+	/* The 'old' sink - before an HPD.
+	 * The 'current' sink is in dc_link->sink. */
+	const struct dc_sink *dc_sink;
+	const struct dc_link *dc_link;
+	const struct dc_sink *dc_em_sink;
+	const struct dc_target *target;
 	void *con_priv;
 	bool dac_load_detect;
 	bool detected_by_load; /* if the connection status was determined by load */
@@ -519,18 +578,41 @@ struct amdgpu_connector {
 	enum amdgpu_connector_audio audio;
 	enum amdgpu_connector_dither dither;
 	unsigned pixelclock_for_modeset;
+
+	struct drm_dp_mst_topology_mgr mst_mgr;
+	struct amdgpu_dm_dp_aux dm_dp_aux;
+	struct drm_dp_mst_port *port;
+	struct amdgpu_connector *mst_port;
+	struct amdgpu_encoder *mst_encoder;
+	struct semaphore mst_sem;
+
+	/* TODO see if we can merge with ddc_bus or make a dm_connector */
+	struct amdgpu_i2c_adapter *i2c;
+
+	/* Monitor range limits */
+	int min_vfreq ;
+	int max_vfreq ;
+	int pixel_clock_mhz;
+
 };
 
-struct amdgpu_framebuffer {
-	struct drm_framebuffer base;
-	struct drm_gem_object *obj;
+/* TODO: start to use this struct and remove same field from base one */
+struct amdgpu_mst_connector {
+	struct amdgpu_connector base;
+
+	struct drm_dp_mst_topology_mgr mst_mgr;
+	struct amdgpu_dm_dp_aux dm_dp_aux;
+	struct drm_dp_mst_port *port;
+	struct amdgpu_connector *mst_port;
+	bool is_mst_connector;
+	struct amdgpu_encoder *mst_encoder;
 };
 
 #define ENCODER_MODE_IS_DP(em) (((em) == ATOM_ENCODER_MODE_DP) || \
 				((em) == ATOM_ENCODER_MODE_DP_MST))
 
 /* Driver internal use only flags of amdgpu_get_crtc_scanoutpos() */
-#define USE_REAL_VBLANKSTART 		(1 << 30)
+#define USE_REAL_VBLANKSTART		(1 << 30)
 #define GET_DISTANCE_TO_VBLANKSTART	(1 << 31)
 
 void amdgpu_link_encoder_connector(struct drm_device *dev);

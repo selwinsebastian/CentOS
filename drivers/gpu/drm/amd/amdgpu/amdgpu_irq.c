@@ -36,6 +36,10 @@
 
 #include <linux/pm_runtime.h>
 
+#ifdef CONFIG_DRM_AMD_DAL
+#include "amdgpu_dm_irq.h"
+#endif
+
 #define AMDGPU_WAIT_IDLE_TIMEOUT 200
 
 /*
@@ -215,11 +219,6 @@ int amdgpu_irq_init(struct amdgpu_device *adev)
 	int r = 0;
 
 	spin_lock_init(&adev->irq.lock);
-	r = drm_vblank_init(adev->ddev, adev->mode_info.num_crtc);
-	if (r) {
-		return r;
-	}
-	adev->ddev->vblank_disable_allowed = true;
 
 	/* enable msi */
 	adev->irq.msi_enabled = false;
@@ -232,7 +231,16 @@ int amdgpu_irq_init(struct amdgpu_device *adev)
 		}
 	}
 
-	INIT_WORK(&adev->hotplug_work, amdgpu_hotplug_work_func);
+	if (!amdgpu_device_has_dal_support(adev)) {
+		r = drm_vblank_init(adev->ddev, adev->mode_info.num_crtc);
+		if (r)
+			return r;
+
+		/* pre DCE11 */
+		INIT_WORK(&adev->hotplug_work,
+				amdgpu_hotplug_work_func);
+	}
+	
 	INIT_WORK(&adev->reset_work, amdgpu_irq_reset_work_func);
 
 	adev->irq.installed = true;
@@ -384,6 +392,18 @@ int amdgpu_irq_update(struct amdgpu_device *adev,
 	return r;
 }
 
+void amdgpu_irq_gpu_reset_resume_helper(struct amdgpu_device *adev)
+{
+	int i, j;
+	for (i = 0; i < AMDGPU_MAX_IRQ_SRC_ID; i++) {
+		struct amdgpu_irq_src *src = adev->irq.sources[i];
+		if (!src)
+			continue;
+		for (j = 0; j < src->num_types; j++)
+			amdgpu_irq_update(adev, src, j);
+	}
+}
+
 /**
  * amdgpu_irq_get - enable interrupt
  *
@@ -498,7 +518,7 @@ static int amdgpu_irqdomain_map(struct irq_domain *d,
 	return 0;
 }
 
-static struct irq_domain_ops amdgpu_hw_irqdomain_ops = {
+static const struct irq_domain_ops amdgpu_hw_irqdomain_ops = {
 	.map = amdgpu_irqdomain_map,
 };
 

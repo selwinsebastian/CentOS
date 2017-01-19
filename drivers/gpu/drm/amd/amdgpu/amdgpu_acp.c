@@ -35,17 +35,17 @@
 
 #include "acp_gfx_if.h"
 
-#define ACP_TILE_ON_MASK                0x03
-#define ACP_TILE_OFF_MASK               0x02
-#define ACP_TILE_ON_RETAIN_REG_MASK     0x1f
-#define ACP_TILE_OFF_RETAIN_REG_MASK    0x20
+#define ACP_TILE_ON_MASK		0x03
+#define ACP_TILE_OFF_MASK		0x02
+#define ACP_TILE_ON_RETAIN_REG_MASK	0x1f
+#define ACP_TILE_OFF_RETAIN_REG_MASK	0x20
 
-#define ACP_TILE_P1_MASK                0x3e
-#define ACP_TILE_P2_MASK                0x3d
-#define ACP_TILE_DSP0_MASK              0x3b
-#define ACP_TILE_DSP1_MASK              0x37
+#define ACP_TILE_P1_MASK		0x3e
+#define ACP_TILE_P2_MASK		0x3d
+#define ACP_TILE_DSP0_MASK		0x3b
+#define ACP_TILE_DSP1_MASK		0x37
 
-#define ACP_TILE_DSP2_MASK              0x2f
+#define ACP_TILE_DSP2_MASK		0x2f
 
 #define ACP_DMA_REGS_END		0x146c0
 #define ACP_I2S_PLAY_REGS_START		0x14840
@@ -240,10 +240,12 @@ static int acp_poweron(struct generic_pm_domain *genpd)
 static struct device *get_mfd_cell_dev(const char *device_name, int r)
 {
 	char auto_dev_name[25];
+	char buf[8];
 	struct device *dev;
 
-	snprintf(auto_dev_name, sizeof(auto_dev_name),
-		 "%s.%d.auto", device_name, r);
+	sprintf(buf, ".%d.auto", r);
+	strcpy(auto_dev_name, device_name);
+	strcat(auto_dev_name, buf);
 	dev = bus_find_device_by_name(&platform_bus_type, NULL, auto_dev_name);
 	dev_info(dev, "device %s added to pm domain\n", auto_dev_name);
 
@@ -265,14 +267,14 @@ static int acp_hw_init(void *handle)
 
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
 
-	const struct amdgpu_ip_block_version *ip_version =
+	const struct amdgpu_ip_block *ip_block =
 		amdgpu_get_ip_block(adev, AMD_IP_BLOCK_TYPE_ACP);
 
-	if (!ip_version)
+	if (!ip_block)
 		return -EINVAL;
 
 	r = amd_acp_hw_init(adev->acp.cgs_device,
-			    ip_version->major, ip_version->minor);
+			    ip_block->version->major, ip_block->version->minor);
 	/* -ENODEV means board uses AZ rather than ACP */
 	if (r == -ENODEV)
 		return 0;
@@ -397,6 +399,10 @@ static int acp_hw_fini(void *handle)
 	struct device *dev;
 
 	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
+ 
+        /* return early if no ACP */
+        if (!adev->acp.acp_genpd)
+                return 0;
 
 	for (i = 0; i < ACP_DEVS ; i++) {
 		dev = get_mfd_cell_dev(adev->acp.acp_cell[i].name, i);
@@ -486,7 +492,8 @@ static int acp_set_powergating_state(void *handle,
 	return 0;
 }
 
-const struct amd_ip_funcs acp_ip_funcs = {
+static const struct amd_ip_funcs acp_ip_funcs = {
+	.name = "acp_ip",
 	.early_init = acp_early_init,
 	.late_init = NULL,
 	.sw_init = acp_sw_init,
@@ -501,4 +508,13 @@ const struct amd_ip_funcs acp_ip_funcs = {
 	.print_status = acp_print_status,
 	.set_clockgating_state = acp_set_clockgating_state,
 	.set_powergating_state = acp_set_powergating_state,
+};
+
+const struct amdgpu_ip_block_version acp_ip_block =
+{
+	.type = AMD_IP_BLOCK_TYPE_ACP,
+	.major = 2,
+	.minor = 2,
+	.rev = 0,
+	.funcs = &acp_ip_funcs,
 };

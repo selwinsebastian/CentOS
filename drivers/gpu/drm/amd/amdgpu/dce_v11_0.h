@@ -24,6 +24,15 @@
 #ifndef __DCE_V11_0_H__
 #define __DCE_V11_0_H__
 
-extern const struct amd_ip_funcs dce_v11_0_ip_funcs;
+extern const struct amdgpu_ip_block_version dce_v11_0_ip_block;
+extern const struct amdgpu_ip_block_version dce_v11_2_ip_block;
 
+void dce_v11_0_set_vga_render_state(struct amdgpu_device *adev,
+				    bool render);
+void dce_v11_0_stop_mc_access(struct amdgpu_device *adev,
+			      struct amdgpu_mode_mc_save *save);
+void dce_v11_0_resume_mc_access(struct amdgpu_device *adev,
+				struct amdgpu_mode_mc_save *save);
+void dce_v11_0_disable_dce(struct amdgpu_device *adev);
+bool dce_v11_0_is_display_hung(struct amdgpu_device *adev);
 #endif
