@@ -747,7 +747,7 @@ static int kfd_ioctl_get_clock_counters(struct file *filep,
 	getrawmonotonic64(&time);
 	args->cpu_clock_counter = (uint64_t)timespec64_to_ns(&time);
 
-	get_monotonic_boottime64(&time);
+	get_monotonic_boottime(&time);
 	args->system_clock_counter = (uint64_t)timespec64_to_ns(&time);
 
 	/* Since the counter is in nano-seconds we use 1GHz frequency */
