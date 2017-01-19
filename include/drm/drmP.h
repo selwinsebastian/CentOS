@@ -586,6 +586,15 @@ struct drm_driver {
 	 * Returns 0 on success.
 	 */
 	void (*gem_free_object) (struct drm_gem_object *obj);
+
+         /**
+ 	 *@gem_free_object_unlocked: deconstructor for drm_gem_objects
+ 	 *
+ 	 *This is for drivers which are not encumbered with dev->struct_mutex
+ 	 *legacy locking schemes. Use this hook instead of @gem_free_object.
+ 	 */
+        void (*gem_free_object_unlocked) (struct drm_gem_object *obj);
+
 	int (*gem_open_object) (struct drm_gem_object *, struct drm_file *);
 	void (*gem_close_object) (struct drm_gem_object *, struct drm_file *);
 
