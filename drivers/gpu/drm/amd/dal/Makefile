@@ -17,6 +17,8 @@ subdir-ccflags-y += -DBUILD_FEATURE_TIMING_SYNC=0
 
 DAL_LIBS = amdgpu_dm dc	modules/freesync
 
+KBUILD_CFLAGS += -Wno-error
+
 AMD_DAL = $(addsuffix /Makefile, $(addprefix $(FULL_AMD_DAL_PATH)/,$(DAL_LIBS)))
 
 include $(AMD_DAL)

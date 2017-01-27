@@ -113,3 +113,5 @@ radeon-$(CONFIG_ACPI) += radeon_acpi.o
 obj-$(CONFIG_DRM_RADEON)+= radeon.o
 
 CFLAGS_radeon_trace_points.o := -I$(src)
+
+KBUILD_CFLAGS += -Wno-error
