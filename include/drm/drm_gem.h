@@ -236,10 +236,14 @@ drm_gem_object_unreference_unlocked(struct drm_gem_object *obj)
 		return;
 
 	dev = obj->dev;
-	if (kref_put_mutex(&obj->refcount, drm_gem_object_free, &dev->struct_mutex))
-		mutex_unlock(&dev->struct_mutex);
-	else
-		might_lock(&dev->struct_mutex);
+	might_lock(&dev->struct_mutex);
+
+        if (dev->driver->gem_free_object_unlocked)
+                kref_put(&obj->refcount, drm_gem_object_free);
+        else if (kref_put_mutex(&obj->refcount, drm_gem_object_free,
+                                &dev->struct_mutex))
+                mutex_unlock(&dev->struct_mutex);
+
 }
 
 int drm_gem_handle_create(struct drm_file *file_priv,
